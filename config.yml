@@ -1,0 +1,11 @@
+media:
+  - name: "Bearly Biblical"
+    type: "show" # show, movie, etc
+    amount: 1
+    schedule: "weekly" # weekly, monthly, or once
+
+
+  # - name: "Breaking Laws"
+  #   type: "show"
+  #   amount: 1
+  #   schedule: "once"
