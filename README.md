@@ -10,16 +10,13 @@ A Python script to automate the process of funding shows on Loor.tv. The script 
 ## Requirements
 
 - Python 3.7+
-- Playwright for Python
-- PyYAML
-- python-dotenv
 
 ## Setup
 
 1. Install dependencies:
 
 ```bash
-pip install playwright python-dotenv pyyaml
+pip install -r requirements.txt
 playwright install chromium
 ```
 
