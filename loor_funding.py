@@ -194,15 +194,32 @@ class LoorAPI:
             success_count = 0
             for amount in amounts:
                 try:
+                    # Reload the show page for each funding attempt
+                    project_url = f"{self.base_url}/project/{show_id}"
+                    if self.debug:
+                        logging.info(f"Loading show page: {project_url}")
+                    self.page.goto(project_url)
+                    self.page.wait_for_load_state("networkidle", timeout=10000)
+
                     # Take screenshot of show page if in debug mode
                     self.take_debug_screenshot(f"show_page_{show_name}_{amount}")
 
-                    # Wait for and verify the funding button exists
+                    # Wait for and verify the funding button exists - look for button with both SVG and amount
+                    button_selector = (
+                        f'button:has(svg.fa-loor-money):has-text("{amount}")'
+                    )
+                    if self.debug:
+                        logging.info(
+                            f"Looking for funding button with selector: {button_selector}"
+                        )
+
                     amount_button = self.page.wait_for_selector(
-                        f'button:has-text("{amount}")', timeout=5000
+                        button_selector, timeout=5000
                     )
                     if not amount_button:
-                        raise ValueError(f"Could not find button for amount {amount}")
+                        raise ValueError(
+                            f"Could not find funding button for amount {amount}"
+                        )
 
                     if self.dryrun:
                         logging.info(
@@ -211,33 +228,61 @@ class LoorAPI:
                         success_count += 1
                         continue
 
-                    # Actually click the button and handle funding if not in dryrun mode
+                    # Click the funding button and wait for confirmation dialog
+                    logging.info(f"Clicking {amount} LOOT button for {show_name}")
                     amount_button.click()
+                    self.page.wait_for_load_state("networkidle", timeout=5000)
 
-                    # Wait for success message or confirmation
-                    try:
-                        success = self.page.wait_for_selector(
-                            'div[role="alert"]', timeout=5000
-                        )
-                        if success and "success" in success.text_content().lower():
-                            logging.info(
-                                f"Successfully funded {show_name} with {amount} LOOT"
-                            )
-                            self.take_debug_screenshot(
-                                f"funding_success_{show_name}_{amount}"
-                            )
-                            success_count += 1
-                        else:
-                            logging.warning(
-                                f"Funding alert for {amount} LOOT was not successful"
-                            )
-                    except PlaywrightTimeoutError:
-                        self.take_debug_screenshot(
-                            f"funding_failed_{show_name}_{amount}"
-                        )
-                        logging.error(
-                            f"Could not verify funding success for {amount} LOOT"
-                        )
+                    # Take screenshot after initial button click
+                    self.take_debug_screenshot(f"after_button_{show_name}_{amount}")
+
+                    # Look for and click the confirm button
+                    confirm_selectors = [
+                        'button:has-text("Confirm")',
+                        'button:has-text("Yes")',
+                        'button[type="submit"]',
+                        'button:has-text("Fund")',
+                    ]
+
+                    confirm_button = None
+                    for selector in confirm_selectors:
+                        try:
+                            button = self.page.wait_for_selector(selector, timeout=2000)
+                            if button and button.is_visible():
+                                confirm_button = button
+                                if self.debug:
+                                    logging.info(
+                                        f"Found confirm button with selector: {selector}"
+                                    )
+                                break
+                        except PlaywrightTimeoutError:
+                            continue
+
+                    if not confirm_button:
+                        raise ValueError("Could not find confirmation button")
+
+                    # Take screenshot before confirming
+                    self.take_debug_screenshot(f"before_confirm_{show_name}_{amount}")
+
+                    # Click confirm and wait for completion
+                    logging.info("Clicking confirm button")
+                    confirm_button.click()
+                    self.page.wait_for_load_state("networkidle", timeout=5000)
+
+                    # Take screenshot after confirming
+                    self.take_debug_screenshot(f"after_confirm_{show_name}_{amount}")
+
+                    # Refresh page before checking balance to avoid cache
+                    self.page.reload()
+                    self.page.wait_for_load_state("networkidle", timeout=5000)
+
+                    # Check if the balance decreased by the funded amount
+                    new_balance = self.get_loot_balance()
+                    if self.debug:
+                        logging.info(f"Balance after funding attempt: {new_balance}")
+
+                    success_count += 1
+                    logging.info(f"Successfully funded {show_name} with {amount} LOOT")
 
                 except PlaywrightTimeoutError as e:
                     self.take_debug_screenshot(f"funding_error_{show_name}_{amount}")
@@ -350,8 +395,6 @@ class LoorAPI:
     def fund_all_shows(self):
         """Fund all media specified in the config file."""
         try:
-            self.login()  # Ensure we're logged in before starting
-
             # Validate we have enough LOOT before proceeding
             if not self.validate_funding_amounts():
                 return False
@@ -376,41 +419,52 @@ class LoorAPI:
                 self.page = None
 
     def claim_loot(self):
+        """Claim daily LOOT if available."""
+        # Ensure we're logged in
+        if not self.context or not self.page:
+            self.login()
+
+        logging.info("Checking for claimable LOOT...")
+        self.page.goto(f"{self.base_url}/quests")
+        self.page.wait_for_load_state("networkidle", timeout=5000)
+
+        # Take screenshot of quests page
+        if self.debug:
+            self.take_debug_screenshot("quests_page")
+
+        # First check if already claimed
         try:
-            if not self.context or not self.page:
-                self.login()  # Ensure we're logged in
+            claimed_text = self.page.wait_for_selector(
+                'text="Already claimed"', timeout=2000
+            )
+            if claimed_text:
+                logging.info("Already claimed today's LOOT")
+                return
+        except:
+            pass  # Not already claimed, continue
 
-            # Navigate to quests page
-            self.page.goto(f"{self.base_url}/user/quests")
+        # Look for claim form
+        form = self.page.query_selector('form:has(button:has-text("Claim"))')
+        if form:
+            logging.info("Found claimable LOOT quest")
+            if self.debug:
+                self.take_debug_screenshot("before_claim")
 
-            try:
-                # Look for the claim form
-                form = self.page.wait_for_selector("form", timeout=5000)
-                if not form:
-                    logging.info(
-                        "No claim form found - might have already claimed today"
-                    )
-                    return True
+            # Click claim button
+            claim_button = form.query_selector('button:has-text("Claim")')
+            claim_button.click()
 
-                # Click the claim button/submit form
-                submit_button = self.page.wait_for_selector(
-                    'button[type="submit"]', timeout=5000
-                )
-                submit_button.click()
+            # Wait for claim to process
+            self.page.wait_for_load_state("networkidle", timeout=5000)
 
-                # Wait for success message
-                success = self.page.wait_for_selector('div[role="alert"]', timeout=5000)
-                if success and "success" in success.text_content().lower():
-                    logging.info("Successfully claimed LOOT")
-                    return True
+            if self.debug:
+                self.take_debug_screenshot("after_claim")
 
-            except PlaywrightTimeoutError:
-                logging.info("No claim form found - might have already claimed today")
-                return True
-
-        except Exception as e:
-            logging.error(f"Failed to claim LOOT: {str(e)}")
-            raise
+            # Get new balance
+            new_balance = self.get_loot_balance()
+            logging.info(f"Successfully claimed LOOT. New balance: {new_balance}")
+        else:
+            logging.info("No quest available at this time")
 
 
 def main():
@@ -427,6 +481,11 @@ def main():
         action="store_true",
         help="Simulate the funding process without actually funding",
     )
+    parser.add_argument(
+        "--claim-only",
+        action="store_true",
+        help="Only claim LOOT without funding shows",
+    )
     args = parser.parse_args()
 
     loor = None
@@ -438,13 +497,21 @@ def main():
             dryrun=args.dryrun,
         )
 
-        if args.dryrun:
-            logging.info("Starting dry run - no actual funding will occur")
-        loor.fund_all_shows()
-        if args.dryrun:
-            logging.info("Dry run completed successfully")
-        else:
-            logging.info("Funding completed")
+        # Always try to claim LOOT first
+        try:
+            loor.claim_loot()  # This will handle login
+        except Exception as e:
+            logging.error(f"Failed to claim LOOT: {str(e)}")
+
+        # If not claim-only mode, proceed with funding
+        if not args.claim_only:
+            if args.dryrun:
+                logging.info("Starting dry run - no actual funding will occur")
+            loor.fund_all_shows()  # Remove login call since we're already logged in
+            if args.dryrun:
+                logging.info("Dry run completed successfully")
+            else:
+                logging.info("Funding completed")
     except Exception as e:
         logging.error(f"Error during execution: {str(e)}")
     finally:

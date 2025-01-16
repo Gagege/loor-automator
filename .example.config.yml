@@ -1,0 +1,16 @@
+media:
+  # Example show with multiple funding amounts
+  - name: "Show One"
+    type: "show"
+    amounts: [100, 400] # Will fund twice: once with 100 LOOT, once with 400 LOOT
+
+  # Example show with single funding amount
+  - name: "Show Two"
+    type: "show"
+    amounts: [800] # Will fund once with 800 LOOT
+
+
+  # Uncomment and modify these examples as needed
+  # - name: "Another Show"
+  #   type: "show"
+  #   amounts: [100]  # Will fund once with 100 LOOT
